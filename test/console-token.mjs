@@ -231,6 +231,33 @@ async function post(routes, p, obj) {
   process.env.DSH_PROFILE_DIR = saved
 }
 
+// ⑩ 舍友场景：profile 补丁里没有可用线索时，靠凭据库的**引用名**兜底。
+// （GUI 保存位置、路由命名都可能不同，不能只赌 cordis.patch.yml + dashscope 字样）
+{
+  const empty = path.join(TMP, 'profile-none')
+  fs.mkdirSync(empty, { recursive: true })
+  const home = path.join(TMP, 'home-refname')
+  fs.mkdirSync(home, { recursive: true })
+  // 伪造一份凭据库：只放引用名与假值
+  fs.writeFileSync(path.join(home, '.credentials.yaml'),
+    'refs:\n  QWEN_MAAS_API_KEY: sk-fake-qwen\n  SOMETHING_ELSE: abc\n')
+  const savedDir = process.env.DSH_PROFILE_DIR
+  const savedHome = process.env.DSH_HOME
+  const savedProf = process.env.DSH_PROFILE
+  process.env.DSH_PROFILE_DIR = empty
+  process.env.DSH_PROFILE = 'no-such-profile'
+  process.env.DSH_HOME = home
+  const { store, routes } = await boot(32)
+  store.QWEN_MAAS_API_KEY = 'sk-fake-qwen'
+  const st = await get(routes, '/dsh-bailian/state.json?refresh=1')
+  ok('无 profile 线索时按引用名兜底发现',
+    st.tpm.ok === true && st.tpm.keyRef === 'QWEN_MAAS_API_KEY',
+    JSON.stringify({ ok: st.tpm.ok, ref: st.tpm.keyRef, code: st.tpm.code }))
+  process.env.DSH_PROFILE_DIR = savedDir
+  process.env.DSH_PROFILE = savedProf
+  process.env.DSH_HOME = savedHome
+}
+
 function DSH2() { return DSH }
 
 server.close()

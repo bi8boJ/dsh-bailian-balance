@@ -1,6 +1,6 @@
 {
   "name": "dsh-bailian-balance",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "在 DSH 界面右边缘加一个把手，点开是阿里云百炼额度与用量面板",
   "keywords": [
     "dsh",
