@@ -59,10 +59,17 @@ function mkNode(tag) {
   return n
 }
 const byId = {}
+const docListeners = {}
 const document = {
   head: mkNode('head'), body: mkNode('body'), documentElement: mkNode('html'),
-  createElement: mkNode, addEventListener() {}, activeElement: null,
+  createElement: mkNode,
+  addEventListener(t, fn) { (docListeners[t] = docListeners[t] || []).push(fn) },
+  removeEventListener() {}, activeElement: null,
   getElementById(id) { return byId[id] || null },
+}
+// 像浏览器那样向 document 派发事件（点外部关闭必须真派发才测得出来）
+function fireDoc(type, target) {
+  for (const fn of docListeners[type] || []) fn({ type, target })
 }
 const origAppend = document.body.appendChild
 document.body.appendChild = function (c) { if (c.id) byId[c.id] = c; return origAppend.call(document.body, c) }
@@ -129,11 +136,18 @@ setTimeout(() => {
     ok('抽屉宽度已应用（默认 424）', drawer.style.width === '424px', String(drawer.style.width))
     // —— 回归：面板右上角绝不能与 Electron 窗口关闭键贴脸 ——
     ok('抽屉从 top:48px 起（避开窗口控件带）', src.includes('-drawer{position:fixed;top:48px'))
-    ok('头部右侧留 96px 空带', /-hd\{[^}]*padding-right:96px/.test(src))
+    // 原来靠「头部留 96px 空带」避让 Electron 窗口控件；现在抽屉整体从 top:48px 起、
+    // 关闭按钮在抽屉内部，该不变量改由几何量实测把关（见 geom2.py 的 xBtn 检查）。
+    ok('头部为关闭按钮预留了空间', /-hd\{[^}]*padding-right:/.test(src))
     // 数组里出现 `',,` 会造出空槽（join 后塞进 undefined 空行）；只查这一种真实笔误，
     // 不要用 \[\s*, 之类的宽泛式——它会误伤 /[,\s]+/ 这种正则字面量。
     ok('CSS 数组无空槽', !/',,/.test(src))
-    ok('关闭按钮在左侧动作组内', /-acts[\s\S]{0,500}data-act="close"/.test(src))
+    // —— 用户反馈#3：关闭按钮挪到面板自己的右上角（抽屉 top:48px 已低于窗口控件带）——
+    const actsBlock = (/dshbl-acts[\s\S]*?<\/div>/.exec(drawer.innerHTML) || [''])[0]
+    ok('关闭按钮不在左侧动作组里', !/data-act="close"/.test(actsBlock), actsBlock.slice(0, 60))
+    ok('关闭按钮在头部内', /dshbl-hd[\s\S]{0,900}data-act="close"/.test(drawer.innerHTML))
+    ok('关闭按钮用 ✕ 图标', /data-act="close"[^>]*>[^<]*✕/.test(drawer.innerHTML) ||
+      /✕[^<]*<\/span>/.test((/data-act="close"[\s\S]{0,80}/.exec(drawer.innerHTML) || [''])[0]))
     // —— Task 2：三行摘要替换四宫格 ——
     const dh = drawer.innerHTML
     ok('摘要三行都在', /dshbl-sum/.test(dh) && /今日/.test(dh) && /余额/.test(dh) && /免费/.test(dh), dh.slice(0, 60))
@@ -257,6 +271,12 @@ setTimeout(() => {
       ok('B 模式渲染三步向导', /dshbl-wiz/.test(bMode) && (bMode.match(/dshbl-step/g) || []).length === 3,
         'steps=' + (bMode.match(/dshbl-step/g) || []).length)
       ok('向导有跳过按钮', /data-act="obskip"/.test(bMode))
+      // —— 用户反馈#2：RAM 权限要给明确的操作路径与提醒 ——
+      ok('向导第2步含具体 RAM 操作路径', /访问控制|RAM/.test(bMode) && /添加权限|新增授权/.test(bMode) &&
+        /AliyunBSSReadOnlyAccess/.test(bMode))
+      ok('向导第2步说明密钥只显示一次', /只显示一次|仅显示一次|立即保存/.test(bMode))
+      // —— 用户反馈#1 收尾：自动发现失败时能在设置里手填凭据名 ——
+      ok('设置页有 API Key 凭据名字段', /id="dshbl-keyref"/.test(seen.cfg))
       ok('数据仍在向导之下', bMode.indexOf('dshbl-wiz') < bMode.indexOf('dshbl-sum'))
       const src0 = await openWith({}, (st) => { st.consoleLoggedIn = true })
       ok('全部就绪时不再显示引导', !/dshbl-ob|dshbl-wiz/.test(src0), src0.slice(0, 40))
@@ -273,6 +293,19 @@ setTimeout(() => {
       ok('CSS 里不再引用 --y 系列', !/--y[a-z0-9-]*\s*[:(]/.test(src))
 
       // firstRun 的写回已由上面 Task 3 的 save 断言覆盖（同一次点击同时验 accent 与 firstRun）。
+
+      // —— 用户反馈#4：点面板外区域快速关闭 ——
+      await openWith({})
+      const d3 = document.body.children.find((c) => /dshbl-drawer/.test(c.className))
+      const h3 = document.body.children.find((c) => /dshbl-handle/.test(c.className))
+      ok('抽屉处于展开态', d3 && d3.classList.contains('open'), d3 ? d3.className : '(无)')
+      const inside = mkNode('span'); inside.parentNode = d3
+      fireDoc('pointerdown', inside)
+      ok('点面板内不误关', d3.classList.contains('open'), d3.className)
+      fireDoc('pointerdown', h3)
+      ok('点把手不误关', d3.classList.contains('open'), d3.className)
+      fireDoc('pointerdown', mkNode('div'))
+      ok('点面板外关闭抽屉', !d3.classList.contains('open'), d3.className)
 
       console.log('\n' + pass + ' passed, ' + fail + ' failed')
       process.exit(fail ? 1 : 0)

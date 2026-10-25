@@ -2,6 +2,24 @@
 
 遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
+## v0.3.1
+
+### 新增
+- **百炼 API Key 凭据名自动发现**：从 profile 的 cordis 补丁里配对 `baseURL` 含 dashscope 的
+  provider 的 `apiKeyEnv`，逐个尝试解析。之前只认写死的 `ALIYUN_DASHSCOPE_API_KEY`，
+  而 DSH 设置界面新建路由时是按路由名派生 `<ROUTE>_API_KEY`，导致"刚配好 key 却显示不识别"。
+  发现失败时错误信息会列出尝试过的所有凭据名，设置里也可手填。
+- **点面板外即关闭**（`widget.closeOnOutside`，默认开）。用 `pointerdown` 且要求按下目标在面板与
+  把手之外，所以在面板内选文字拖到外面不会被误关。
+- 关闭按钮移到面板自己的右上角（✕）。抽屉从 `top:48px` 起，已低于 Electron 窗口控件带，
+  几何实测确认不再重合；原先"头部留 96px 空带"的避让方式随之取消。
+
+### 改变
+- 向导第 2 步的 RAM 授权说明改为可操作四步（建用户 → 勾选 OpenAPI 调用访问 →
+  立刻复制密钥并提示 Secret 只显示一次 → 新增授权搜 `AliyunBSSReadOnlyAccess` → 回面板粘贴启用）。
+- 测试替身修正：假 dashscope 网关的响应形状对齐真实接口（`{output:{quotas,total}}`），
+  之前返回裸数组会让解析抛异常并被归类成 `TPM_FAIL`。
+
 ## v0.3.0
 
 ### 新增

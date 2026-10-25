@@ -61,7 +61,11 @@
     '.' + P + '-drawer::-webkit-scrollbar-thumb:hover{background:#3A4553;background-clip:padding-box;border:3px solid transparent}',
     '.' + P + '-drawer::-webkit-scrollbar-track{background:transparent}',
     // —— 头部 ——
-    '.' + P + '-hd{padding-right:96px;padding-top:16px}',
+    '.' + P + '-hd{position:relative;padding-right:46px;padding-top:16px}',
+    '.' + P + '-x{position:absolute;top:16px;right:2px;width:28px;height:28px;border-radius:8px;cursor:pointer;',
+    'display:flex;align-items:center;justify-content:center;font-size:15px;line-height:1;color:var(--dim);',
+    'border:1px solid transparent;transition:color var(--dur),background var(--dur),border-color var(--dur)}',
+    '.' + P + '-x:hover{color:var(--txt);background:var(--raise);border-color:var(--line2)}',
     '.' + P + '-hd h4{margin:0;font:500 13.5px/1.4 var(--sans);letter-spacing:.01em;display:flex;align-items:center;gap:10px;color:var(--txt)}',
     '.' + P + '-mark{width:9px;height:9px;border-radius:50%;flex:0 0 auto;background:var(--acc);box-shadow:0 0 0 3px var(--acc-12),0 0 14px var(--acc-28)}',
     '.' + P + '-meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;font:10px/1.6 var(--tech);letter-spacing:.1em;text-transform:uppercase;color:var(--dim3)}',
@@ -348,6 +352,18 @@
     bindDrag(handle)
     pill.onclick = function () { toggle() }
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && open) setOpen(false) })
+    // 点面板外快速关闭。用 pointerdown 且要求按下目标在面板与把手之外，
+    // 这样在面板内选文字、拖到外面松手不会被误关；把手自身的点击也不受影响。
+    document.addEventListener('pointerdown', function (e) {
+      if (!open) return
+      var w = ((state && state.config) || {}).widget || {}
+      if (w.closeOnOutside === false) return
+      var t = e && e.target
+      if (!t || !t.tagName) return
+      if (drawer.contains(t) || handle.contains(t)) return
+      if (typeof panel !== 'undefined' && panel && panel.contains && panel.contains(t)) return
+      setOpen(false)
+    }, true)
     try { open = localStorage.getItem(LS_OPEN) === '1' } catch (e) { open = false }
     pull(false)
     timer = setInterval(function () { pull(true) }, 30000)
@@ -458,6 +474,9 @@
     // 保证没有任何可点元素进入 Electron 窗口控件（右上角）的命中区。
     return '<div class="' + P + '-hd">'
       + '<h4><span class="' + P + '-mark"></span>阿里云百炼 · 额度与用量</h4>'
+      // 关闭按钮在面板自己的右上角：抽屉从 top:48px 起，已经低于 Electron 的窗口控件带，
+      // 所以不会再和系统的 ✕ 重合（这也是当初把它挪到左侧的原因，现在两个都满足了）。
+      + '<span class="' + P + '-x" data-act="close" title="关闭面板（Esc 或点面板外也可关闭）">✕</span>'
       + '<div class="' + P + '-meta">'
       + '<span class="' + P + '-chip v">v' + esc(s.version || '?') + '</span>'
       + '<span class="' + P + '-chip">数据 ' + esc(ago(s.at)) + '</span>'
@@ -465,7 +484,6 @@
       + '<div class="' + P + '-acts">'
       + '<span class="' + P + '-btn" data-act="refresh" title="立即重新取数">↻ 刷新</span>'
       + '<span class="' + P + '-btn" data-act="tabcfg" title="打开设置">⚙ 设置</span>'
-      + '<span class="' + P + '-btn" data-act="close" title="收起面板（也可按 Esc，或再点一次边缘把手）">›› 收起</span>'
       + '</div></div>'
   }
   function summary() {
@@ -502,10 +520,15 @@
     if (ft.ok && src) ftBody = src + '。' + ftBody
     return [
       { ok: !!(st.tpm && st.tpm.ok), title: '百炼 API Key',
-        body: (st.tpm && st.tpm.ok) ? '已检测到 profile 里的 ALIYUN_DASHSCOPE_API_KEY，实时用量与限流配额已就绪。'
-          : '百炼控制台 → API-KEY 管理 创建，再到 DSH 设置 → 模型 填给这条路由。' },
+        body: (st.tpm && st.tpm.ok)
+          ? '已自动识别到凭据「' + (st.tpm.keyRef || 'profile 里的百炼 key') + '」，实时用量与限流配额已就绪。'
+          : '在 DSH「设置 → 模型」里给百炼路由填 API Key，保存后本面板会自动发现凭据名（不需要手填引用名）。' },
       { ok: !!b.ok, opt: true, title: '账户余额 / 代金券（可选）',
-        body: '在下方「设置」填一对 AK/SK 并勾选启用；建议单建 RAM 子账号，只授 AliyunBSSReadOnlyAccess。' },
+        body: '要给的权限：只读策略 AliyunBSSReadOnlyAccess。'
+          + '怎么给：① 阿里云控制台 → 访问控制 RAM → 用户 → 创建用户，勾选「OpenAPI 调用访问」；'
+          + '② 创建成功后立刻复制 AccessKey ID 与 Secret —— Secret 只显示一次，关掉页面就再也看不到；'
+          + '③ 在该用户的「权限管理」→ 新增授权，搜索 AliyunBSSReadOnlyAccess 并确认；'
+          + '④ 回到本面板「设置」粘贴这两个值、勾选启用。' },
       { ok: !!ft.ok, opt: true, title: '免费额度（可选）', body: ftBody },
     ]
   }
@@ -658,6 +681,8 @@
       + '<select class="' + P + '-in" id="' + P + '-firstrun" style="width:auto">'
         + opt('auto', (w.firstRun === 'wizard' ? 'wizard' : 'auto'), '上手：自动（检测到即用）')
         + opt('wizard', (w.firstRun === 'wizard' ? 'wizard' : 'auto'), '上手：分步引导') + '</select>'
+      + '<label class="' + P + '-muted"><input type="checkbox" id="' + P + '-outclose" '
+      + (w.closeOnOutside === false ? '' : 'checked') + '> 点面板外关闭</label>'
       + '<label class="' + P + '-muted">抽屉宽度 <input class="' + P + '-in" id="' + P + '-width" type="number" min="300" max="760" step="8" value="' + (Number(w.width) || 424) + '" style="width:78px;display:inline-block"></label>'
       + '</div>'
       + '<div class="' + P + '-muted" style="margin-top:5px">侧边栏模式：点边缘把手展开 / 收起，<b>上下拖动把手可调位置</b>，Esc 关闭。默认停右边缘，不再压住左下角的设置入口。</div>'
@@ -674,6 +699,9 @@
     return show + acc
       + '<div class="' + P + '-sec">监控的模型（逗号分隔 · 请改成你账号里实际在用的模型名）</div>'
       + '<input class="' + P + '-in" id="' + P + '-models" value="' + esc((c.models || []).join(', ')) + '">'
+      + '<div class="' + P + '-sec" style="margin-top:12px">百炼 API Key 的凭据名（留空 = 自动发现）</div>'
+      + '<input class="' + P + '-in" id="' + P + '-keyref" placeholder="留空即可；自动发现失败时手填，如 ALIYUN_DASHSCOPE_API_KEY" value="'
+      + esc(c.apiKeyRef === 'auto' ? '' : (c.apiKeyRef || '')) + '">'
       + '<div class="' + P + '-sec" style="margin-top:12px">单价（每行一个：模型|输入|输出|缓存 —— 元/百万 token，留空则只报 token）</div>'
       + '<textarea class="' + P + '-in" id="' + P + '-prices" rows="4" placeholder="qwen3.8-flash|1.2|12|0.24">' + esc(pm) + '</textarea>'
       + '<div class="' + P + '-sec" style="margin-top:12px">BSS 账户凭据（可选，用于账户余额/代金券；只读权限即可）</div>'
@@ -789,6 +817,7 @@
       var wid = document.getElementById(P + '-width')
       var patch = {
         models: models.length ? models : DEFAULTS_MODELS, prices: prices,
+        apiKeyRef: ((document.getElementById(P + '-keyref') || {}).value || '').trim() || 'auto',
         bss: { enabled: !!document.getElementById(P + '-bsson').checked },
         widget: Object.assign({}, ((state && state.config) || {}).widget || {}, {
           mode: (document.getElementById(P + '-mode') || {}).value || 'sidebar',
@@ -796,6 +825,7 @@
           width: wid ? Math.min(760, Math.max(300, Number(wid.value) || 424)) : 424,
           accent: accentNow,
           firstRun: (document.getElementById(P + '-firstrun') || {}).value === 'wizard' ? 'wizard' : 'auto',
+          closeOnOutside: !!(document.getElementById(P + '-outclose') || {}).checked,
         }),
       }
       var akid = (document.getElementById(P + '-akid').value || '').trim()

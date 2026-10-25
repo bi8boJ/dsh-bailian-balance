@@ -30,7 +30,15 @@ const server = http.createServer((req, res) => {
     if (String(req.url).indexOf('/api/v1/quotas') >= 0) {
       quotaHits++
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ data: [{ model: 'qwen3.8-flash', usage_limit: 123456, usage_field: 'total_tokens', usage_period_sec: 6 }] }))
+      // 形状要对齐真实接口：{ output: { quotas: [...], total } }
+      // （之前返回裸数组，num(j.output.total) 会抛异常，被归类成 TPM_FAIL）
+      res.end(JSON.stringify({
+        output: {
+          total: 1,
+          quotas: [{ model: 'qwen3.8-flash', workspace_id: 'ws-fake-workspace',
+                     model_limit: { usage_limit: 123456, usage_limit_field: 'total_tokens', usage_limit_period: 6, request_limit: null } }],
+        },
+      }))
       return
     }
     res.writeHead(200, { 'content-type': 'application/json' })
@@ -179,6 +187,48 @@ async function post(routes, p, obj) {
   setImmediate(() => { rq.emit('data', JSON.stringify({ models: ['evil'] })); rq.emit('end') })
   await routes.get('/dsh-bailian/config.json')(rq, rs)
   ok('伪造 Host 头 + 非本机对端的写请求被拒', rs.statusCode === 403, 'status=' + rs.statusCode)
+}
+
+// ⑧ 用户反馈#1：key 凭据名自动发现。
+// DSH 设置界面新建 provider 时按路由名派生 `<ROUTE>_API_KEY`，写死一个名字会让
+// 「刚在设置里配好 key」的人看到"不识别"。造一个非标准名字的 profile 来验。
+{
+  const prof = path.join(TMP, 'profile-fake')
+  fs.mkdirSync(prof, { recursive: true })
+  fs.writeFileSync(path.join(prof, 'cordis.patch.yml'), [
+    '- id: llm-pi-ai',
+    '  name: "@deepseek-ai/dsh-llm-pi-ai"',
+    '  config:',
+    '    providers:',
+    '      my-bailian:',
+    '        displayName: 我的百炼路由',
+    '        apiKeyEnv: MY_BAILIAN_API_KEY',
+    '        api: openai-completions',
+    '        baseURL: https://dashscope.aliyuncs.com/compatible-mode/v1',
+    '',
+  ].join('\n'))
+  const saved = process.env.DSH_PROFILE_DIR
+  process.env.DSH_PROFILE_DIR = prof
+  const { store, routes } = await boot(30)
+  store.MY_BAILIAN_API_KEY = 'sk-fake-discovered'
+  const st = await get(routes, '/dsh-bailian/state.json?refresh=1')
+  ok('非标准凭据名也能发现 key', st.tpm.ok === true && st.tpm.keyRef === 'MY_BAILIAN_API_KEY',
+    JSON.stringify({ ok: st.tpm.ok, ref: st.tpm.keyRef, code: st.tpm.code }))
+  process.env.DSH_PROFILE_DIR = saved
+}
+
+// ⑨ 发现失败时要说清试过哪些名字，而不是只报一个写死的 ref
+{
+  const saved = process.env.DSH_PROFILE_DIR
+  const empty = path.join(TMP, 'profile-empty')
+  fs.mkdirSync(empty, { recursive: true })
+  process.env.DSH_PROFILE_DIR = empty
+  const { routes } = await boot(31)
+  const st = await get(routes, '/dsh-bailian/state.json?refresh=1')
+  ok('找不到 key 时列出尝试过的凭据名',
+    st.tpm.ok === false && st.tpm.code === 'NO_KEY' && /尝试/.test(st.tpm.error || '') && (st.tpm.keyRefs || []).length >= 1,
+    (st.tpm.error || '').slice(0, 60))
+  process.env.DSH_PROFILE_DIR = saved
 }
 
 function DSH2() { return DSH }
