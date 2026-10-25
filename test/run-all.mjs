@@ -1,0 +1,37 @@
+// 一条命令跑完三套测试：node test/run-all.mjs
+// 两套离线套件：纯 Node、零依赖、不发任何外部请求
+//（凭据通道那套起的是 127.0.0.1 的本地假网关）。
+// 另有 test/live-check.mjs —— 它会向阿里云发真实请求，需要本机凭据，
+// 故意**不**包含在这里，免得一跑 npm test 就烧到真实账号。
+// 关键：每套都在**独立的临时 DSH_HOME / BAILIAN_CONFIG_DIR** 里跑，
+// 否则会写到调用者真实的 ~/.dsh 账本与百炼登录态上（曾经踩过）。
+import { spawnSync } from 'child_process'
+import fs from 'fs'
+import os from 'os'
+import path from 'path'
+import { fileURLToPath } from 'url'
+
+const here = path.dirname(fileURLToPath(import.meta.url))
+const root = path.resolve(here, '..')
+
+const SUITES = [
+  ['免费额度凭据通道（本地假网关）', [path.join(here, 'console-token.mjs')]],
+  ['前端渲染冒烟（DOM 桩）', [path.join(here, 'dom-smoke.mjs'), path.join(root, 'assets', 'widget.js')]],
+]
+
+let failed = 0
+for (const [label, args] of SUITES) {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'dshbl-test-'))
+  const r = spawnSync(process.execPath, args, {
+    cwd: root,
+    stdio: 'inherit',
+    env: Object.assign({}, process.env, { DSH_HOME: sandbox, BAILIAN_CONFIG_DIR: sandbox }),
+  })
+  try { fs.rmSync(sandbox, { recursive: true, force: true }) } catch (e) { /* Windows 偶发占用，忽略 */ }
+  const okRun = r.status === 0
+  console.log((okRun ? '  [OK]  ' : '  [FAIL]') + ' ' + label + (okRun ? '' : ' (exit ' + r.status + ')'))
+  console.log('')
+  if (!okRun) failed++
+}
+console.log(failed ? failed + ' 套测试失败' : '全部通过')
+process.exit(failed ? 1 : 0)

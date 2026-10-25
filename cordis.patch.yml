@@ -1,0 +1,7 @@
+# dsh-bailian-balance —— DSH bundle patch
+# 宿主按 bundle 层栈叠加各插件的 patch，本文件把面板插入 profile 配置树。
+# 安装：dsh plugin --profile <desktop|web> add file:<本目录的绝对路径>
+# （桌面版 profile 是 desktop，不写 --profile 时默认是 web）
+- insert:
+    - id: dsh-bailian-balance
+      name: dsh-bailian-balance

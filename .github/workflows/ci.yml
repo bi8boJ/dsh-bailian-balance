@@ -1,0 +1,54 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: ["20", "22"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # 语法检查用 --check 而不是 import：避免在 CI 里真的挂载 DOM 或发请求
+      - name: Syntax check
+        run: |
+          node --check lib/index.js
+          node --check assets/widget.js
+          node --check test/run-all.mjs
+
+      # 离线套件（test/run-all.mjs）：纯 Node、零依赖、不发任何外部请求。
+      # 注意另有 test/live-check.mjs 会向阿里云发真实请求，故意不放进 CI。
+      - name: Run tests
+        run: node test/run-all.mjs
+
+      # 发布卫生：仓库里不允许出现疑似真实凭据。
+      # 夹具里的 AK 用的是短假串 LTAIFAKEFAKEFAKE，所以这里只匹配 18 位以上的真格式，
+      # 免得把自己的测试当泄露报红。
+      - name: Secret scan
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 注意字符类要含连字符：百炼真实 key 形如 sk-ws-xxxx，写成 sk-[A-Za-z0-9]{24,} 匹配不到
+          PATTERNS='LTAI[0-9A-Za-z]{16,}|sk-[A-Za-z0-9-]{20,}|"(access_token|accessToken)"[[:space:]]*:[[:space:]]*"[A-Za-z0-9_-]{24,}"'
+          if grep -rInE "$PATTERNS" --exclude-dir=.git --exclude-dir=node_modules --exclude=ci.yml . ; then
+            echo "::error::工作树里发现疑似真实凭据"
+            exit 1
+          fi
+          # 工作树干净不代表仓库干净：泄露过的东西可能只在历史里，所以整历史再扫一遍
+          if git grep -InE "$PATTERNS" $(git rev-list --all) -- . ':!.github/workflows/ci.yml' ; then
+            echo "::error::git 历史里发现疑似真实凭据"
+            exit 1
+          fi
+          echo "secret scan clean (tree + history)"

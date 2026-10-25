@@ -1,0 +1,5 @@
+node_modules
+test/sandbox-home
+*.log
+.DS_Store
+docs/img/*.html
