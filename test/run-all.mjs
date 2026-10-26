@@ -17,6 +17,7 @@ const root = path.resolve(here, '..')
 const SUITES = [
   ['免费额度凭据通道（本地假网关）', [path.join(here, 'console-token.mjs')]],
   ['前端渲染冒烟（DOM 桩）', [path.join(here, 'dom-smoke.mjs'), path.join(root, 'assets', 'widget.js')]],
+  ['券类型过滤（纯函数）', [path.join(here, 'coupon-filter.mjs')]],
 ]
 
 // —— 自测守卫：测试夹具不许被 ci.yml 的 secret 扫描规则命中 ——

@@ -21,12 +21,43 @@ process.env.BAILIAN_CONFIG_DIR = BLDIR
 let mode = 'ok'
 let quotaHits = 0
 let evilHits = 0
+let catalogHits = 0
 // 同一个本地服务兼当假 dashscope —— 不设它的话 snapshotTpm 会真打
 // https://dashscope.aliyuncs.com（评审实测），"离线套件"就是假话。
 const server = http.createServer((req, res) => {
   let body = ''
   req.on('data', (c) => { body += c })
   req.on('end', () => {
+    if (String(req.url).indexOf('/api/v1/models') >= 0) {
+      catalogHits++
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({
+        code: 'ok', success: true,
+        output: {
+          page_no: 1, page_size: 100, total: 3,
+          models: [
+            // 真实形状（2026-10-26 实测）：prices 是**分组数组**，每组再带一个 prices 列表
+            { model: 'qwen3.8-max', name: 'Qwen3.8 Max', provider: 'qwen', prices: [
+              { range_name: 'Default', prices: [
+                { type: 'input_token', price: '12', price_unit: '每百万tokens', time_band: 'standard' },
+                { type: 'output_token', price: '36', price_unit: '每百万tokens', time_band: 'standard' },
+                { type: 'input_token_cache', price: '1.5', price_unit: '每百万tokens', time_band: 'standard' },
+                { type: 'input_token_batch', price: '6', price_unit: '每百万tokens', time_band: 'standard' },
+              ] } ] },
+            { model: 'qwen3.6-plus', name: 'Qwen3.6 Plus', provider: 'qwen', prices: [
+              { range_name: 'Default', prices: [
+                { type: 'input_token', price: '2', price_unit: '每百万tokens' },
+                { type: 'output_token', price: '8', price_unit: '每百万tokens' },
+                { type: 'input_token_cache', price: '0.4', price_unit: '每百万tokens' },
+              ] } ] },
+            // 兼容另一种写法（prices 直接是对象），代码两种都要能吃
+            { model: 'qwen-old-style', prices: { prices: [
+              { type: 'input_token', price: '1' }, { type: 'output_token', price: '2' }] } },
+          ],
+        },
+      }))
+      return
+    }
     if (String(req.url).indexOf('/api/v1/quotas') >= 0) {
       quotaHits++
       res.writeHead(200, { 'content-type': 'application/json' })
@@ -256,6 +287,90 @@ async function post(routes, p, obj) {
   process.env.DSH_PROFILE_DIR = savedDir
   process.env.DSH_PROFILE = savedProf
   process.env.DSH_HOME = savedHome
+}
+
+// ⑪ 用户反馈：监控的模型名与单价要能自动识别，且可由使用者决定是否检测。
+// 数据源：profile 补丁里 provider 的 models（块式 - id:）、账本 byModel、
+// 以及 DashScope /api/v1/models 的 prices 数组（实测真接口就是这个形状）。
+{
+  const prof = path.join(TMP, 'profile-block')
+  fs.mkdirSync(prof, { recursive: true })
+  fs.writeFileSync(path.join(prof, 'cordis.patch.yml'), [
+    '- id: llm-pi-ai',
+    '  config:',
+    '    providers:',
+    '      aliyun-dashscope:',
+    '        apiKeyEnv: BLOCK_ROUTE_API_KEY',
+    '        baseURL: https://dashscope.aliyuncs.com/compatible-mode/v1',
+    '        models:',
+    '          - id: qwen3.8-max',
+    '            name: Qwen3.8 Max',
+    '            contextWindow: 1000000',
+    '          - id: qwen3.8-flash',
+    '            name: Qwen3.8 Flash',
+    '',
+  ].join('\n'))
+  const home = path.join(TMP, 'home-block')
+  const bl = path.join(home, 'bailian-balance')
+  fs.mkdirSync(bl, { recursive: true })
+  fs.writeFileSync(path.join(bl, 'config.json'), JSON.stringify({
+    models: ['qwen3.8-flash'],
+    prices: { 'qwen3.8-flash': { input: 0.8, output: 2.7, cache: 0.1 } },
+    autoDetect: true,
+  }))
+  fs.writeFileSync(path.join(bl, 'ledger.json'), JSON.stringify({
+    // 真实结构：byModel[日期][模型] = { input, cache, output, tokens }
+    byModel: { '2026-10-20': { 'qwen3.6-plus': { tokens: 100, input: 1, cache: 2, output: 3 },
+                               'qwen3.8-flash': { tokens: 200, input: 4, cache: 5, output: 6 } } },
+    days: {},
+  }))
+  const sd = process.env.DSH_PROFILE_DIR
+  const sh = process.env.DSH_HOME
+  process.env.DSH_PROFILE_DIR = prof
+  process.env.DSH_HOME = home
+  const { store, routes } = await boot(40)
+  store.BLOCK_ROUTE_API_KEY = 'sk-fake-block'
+  const st = await get(routes, '/dsh-bailian/state.json?refresh=1')
+  const mo = st.monitor || {}
+  ok('自动识别：profile 块式 models + 账本模型并入监控列表',
+    ['qwen3.8-flash', 'qwen3.8-max', 'qwen3.6-plus'].every((m) => (mo.models || []).includes(m)),
+    JSON.stringify(mo.models))
+  ok('自动识别：单价取自 DashScope 目录接口',
+    !!mo.prices && Number((mo.prices['qwen3.8-max'] || {}).input) === 12 &&
+    Number((mo.prices['qwen3.8-max'] || {}).output) === 36 && Number((mo.prices['qwen3.8-max'] || {}).cache) === 1.5,
+    JSON.stringify((mo.prices || {})['qwen3.8-max']))
+  ok('手填单价优先于自动识别',
+    Number(((mo.prices || {})['qwen3.8-flash'] || {}).input) === 0.8 && (mo.source || {})['qwen3.8-flash'] === 'manual',
+    JSON.stringify(mo.source))
+  ok('自动补的模型标为 auto', (mo.source || {})['qwen3.8-max'] === 'auto' && (mo.source || {})['qwen3.6-plus'] === 'auto',
+    JSON.stringify(mo.source))
+  ok('目录拉取有状态可展示', mo.catalog && mo.catalog.ok === true && mo.catalog.count >= 3,
+    JSON.stringify(mo.catalog))
+  process.env.DSH_PROFILE_DIR = sd
+  process.env.DSH_HOME = sh
+}
+
+// ⑫ 使用者可以关掉自动检测（关掉后只认手动配置的模型与单价）
+{
+  const home = path.join(TMP, 'home-off')
+  const bl = path.join(home, 'bailian-balance')
+  fs.mkdirSync(bl, { recursive: true })
+  fs.writeFileSync(path.join(bl, 'config.json'), JSON.stringify({
+    models: ['qwen3.8-flash'],
+    prices: { 'qwen3.8-flash': { input: 0.8, output: 2.7, cache: 0.1 } },
+    autoDetect: false,
+  }))
+  fs.writeFileSync(path.join(bl, 'ledger.json'), JSON.stringify({ byModel: { 'qwen3.6-plus': { tokens: 1 } }, days: {} }))
+  const sh = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+  const before = catalogHits
+  const { routes } = await boot(41)
+  const st = await get(routes, '/dsh-bailian/state.json?refresh=1')
+  const mo = st.monitor || {}
+  ok('关闭检测后只用手动模型', JSON.stringify(mo.models) === JSON.stringify(['qwen3.8-flash']), JSON.stringify(mo.models))
+  ok('关闭检测后不再请求目录接口', catalogHits === before, 'before=' + before + ' after=' + catalogHits)
+  ok('关闭检测状态可被前端读到', mo.autoDetect === false, JSON.stringify(mo.autoDetect))
+  process.env.DSH_HOME = sh
 }
 
 function DSH2() { return DSH }

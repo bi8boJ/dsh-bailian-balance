@@ -76,6 +76,15 @@ document.body.appendChild = function (c) { if (c.id) byId[c.id] = c; return orig
 
 const STATE = {
   at: Date.now(), version: '0.1.5',
+  monitor: {
+    autoDetect: true,
+    models: ['qwen3.8-flash', 'qwen3.8-max', 'qwen3.6-plus'],
+    prices: { 'qwen3.8-flash': { input: 0.8, output: 2.7, cache: 0.1 },
+              'qwen3.8-max': { input: 12, output: 36, cache: 1.5 } },
+    source: { 'qwen3.8-flash': 'manual', 'qwen3.8-max': 'auto' },
+    found: { profile: ['qwen3.8-max'], ledger: ['qwen3.6-plus'], quota: [] },
+    catalog: { ok: true, count: 180, from: 'net', skipped: false, at: 0, error: '' },
+  },
   today: { tokens: 1234567, input: 100, cache: 200, output: 300, calls: 5, money: '¥0.99', byModel: { 'qwen3.8-flash': { tokens: 1234567, input: 100, cache: 200, output: 300 } } },
   lastTurn: { seq: 3, at: '2026-10-20T10:00:00Z', input: 1, cache: 2, output: 3, model: 'qwen3.8-flash' },
   freeTier: {
@@ -88,7 +97,8 @@ const STATE = {
   bss: {
     ok: true, errors: [],
     balance: { available: '0.00', availableCash: '0.00', credit: '0.00', quotaLimit: '0.00', mybankCredit: '0.00', currency: 'CNY' },
-    coupons: [{ no: '000000000000', name: '示例代金券（合成数据）', balance: '123.45', nominal: '300.00', currency: 'CNY', status: 'Available', daysLeft: 365, end: '2027-10-20T03:00:00Z', scope: '通用（不适用商品名单除外）' }],
+      hiddenVouchers: 3, hiddenNote: '另有 3 张满减券未计入（合成数据）',
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             coupons: [{ no: '000000000000', name: '示例代金券（合成数据）', balance: '123.45', nominal: '300.00', currency: 'CNY', status: 'Available', daysLeft: 365, end: '2027-10-20T03:00:00Z', scope: '通用（不适用商品名单除外）' }],
   },
   tpm: { ok: true, total: 356, items: [{ model: 'qwen3.8-flash', usageLimit: 123456, usageField: 'total_tokens', usagePeriodSec: 6, requestLimit: null }] },
   config: { models: ['qwen3.8-flash'], prices: {}, bss: { enabled: true, idRef: 'BSS_ACCESS_KEY_ID' }, widget: {} },
@@ -146,6 +156,32 @@ setTimeout(() => {
     const actsBlock = (/dshbl-acts[\s\S]*?<\/div>/.exec(drawer.innerHTML) || [''])[0]
     ok('关闭按钮不在左侧动作组里', !/data-act="close"/.test(actsBlock), actsBlock.slice(0, 60))
     ok('关闭按钮在头部内', /dshbl-hd[\s\S]{0,900}data-act="close"/.test(drawer.innerHTML))
+    // —— 用户反馈：菜单要有进场与出场动画 ——
+    ok('抽屉关闭态不可命中指针（避免出场期间吞点击）',
+      /-drawer\{[^}]*pointer-events:none/.test(src) && /-drawer\.open\{[^}]*pointer-events:auto/.test(src))
+    ok('抽屉带透明度过渡（不只是位移）', /-drawer\{[^}]*opacity:0[^}]*transition:[^}]*opacity/.test(src))
+    ok('内容区有延迟入场（错峰）',
+      /-body\{[^}]*transition:[^}]*\.06s/.test(src) && /:not\(\.open\)[^]*?-body\{[^}]*opacity:0/.test(src))
+    ok('面板用 keyframes（新建节点 transition 不触发）',
+      /@keyframes dshbl-panel-in/.test(src) && /@keyframes dshbl-panel-out/.test(src) && /-panel\.closing/.test(src))
+    // 同名 keyframes 会互相覆盖（实测：新加的面板动画曾把内容区换页的 dshbl-in 顶掉）
+    const kf = (src.match(/@keyframes ([\w-]+)/g) || []).map((x) => x.replace('@keyframes ', ''))
+    // 名字是从拼接来的（'@keyframes ' + P + '-in'），所以只能对渲染后的 CSS 断言，
+    // 不能对源码 grep 完整类名（这条教训已经踩过五次）
+    // 类名/关键帧名都是拼接出来的，grep 源码必然假阴性 —— 对**实际注入的 CSS** 断言
+    const styleElA = document.head.children.find((c) => c.tagName === 'STYLE')
+    const cssA = styleElA ? styleElA.textContent : ''
+    const kf2 = (cssA.match(/@keyframes [\w-]+/g) || []).map((x) => x.replace('@keyframes ', ''))
+    ok('实际 CSS 里没有重复 keyframes 名', new Set(kf2).size === kf2.length && kf2.length >= 3,
+      'kf=' + kf2.join(','))
+    ok('实际 CSS 含面板进出场关键帧',
+      kf2.indexOf('dshbl-panel-in') >= 0 && kf2.indexOf('dshbl-panel-out') >= 0, 'kf=' + kf2.join(','))
+    ok('内容区换页动画轨迹未被改动',
+      /@keyframes dshbl-in\{from\{opacity:0;transform:translateY\(6px\)/.test(cssA), 'kf=' + kf2.join(','))
+    ok('实际 CSS 里抽屉关闭态不可命中指针',
+      /\.dshbl-drawer\{[^}]*pointer-events:none/.test(cssA) && /\.dshbl-drawer\.open\{[^}]*pointer-events:auto/.test(cssA),
+      cssA.slice(0, 60))
+    ok('降级动效偏好覆盖新动画', /prefers-reduced-motion[^]*animation:none/.test(src))
     ok('关闭按钮用 ✕ 图标', /data-act="close"[^>]*>[^<]*✕/.test(drawer.innerHTML) ||
       /✕[^<]*<\/span>/.test((/data-act="close"[\s\S]{0,80}/.exec(drawer.innerHTML) || [''])[0]))
     // —— Task 2：三行摘要替换四宫格 ——
@@ -170,6 +206,7 @@ setTimeout(() => {
       ok('标签 ' + want + ' 渲染出内容且含「' + kw + '」', drawer.innerHTML.length > 200 && drawer.innerHTML.indexOf(kw) >= 0, drawer.innerHTML.length + ' 字符')
     }
     ok('券卡片含剩余与到期天数', /123\.45/.test(seen.bss) && /剩 365 天/.test(seen.bss))
+    ok('满减券被隐藏时有如实说明', /满减券/.test(seen.bss) && /3 张/.test(seen.bss))
     ok('免费额度表含 UNKNOWN 档', /qwen3\.8-flash/.test(seen.free))
     // 回归：模型拆分必须走 5 列表格，用 kv 行会把 in/cache/out 挤成折行
     ok('模型拆分用 5 列表格（含「缓存读」表头）', /dshbl-g5/.test(seen.live) && /缓存读/.test(seen.live))
@@ -277,6 +314,10 @@ setTimeout(() => {
       ok('向导第2步说明密钥只显示一次', /只显示一次|仅显示一次|立即保存/.test(bMode))
       // —— 用户反馈#1 收尾：自动发现失败时能在设置里手填凭据名 ——
       ok('设置页有 API Key 凭据名字段', /id="dshbl-keyref"/.test(seen.cfg))
+    // —— 用户反馈：模型与单价自动识别，且可由使用者决定是否检测 ——
+    ok('设置页有自动识别开关', /id="dshbl-auto"/.test(seen.cfg) && /自动识别/.test(seen.cfg))
+    ok('设置页标出模型来源（自动/手动）', /手动|自动/.test(seen.cfg) && /qwen3\.8-max/.test(seen.cfg))
+    ok('实时用量显示监控范围', /监控 \d+ 个模型/.test(seen.live), seen.live.slice(0, 60))
       ok('数据仍在向导之下', bMode.indexOf('dshbl-wiz') < bMode.indexOf('dshbl-sum'))
       const src0 = await openWith({}, (st) => { st.consoleLoggedIn = true })
       ok('全部就绪时不再显示引导', !/dshbl-ob|dshbl-wiz/.test(src0), src0.slice(0, 40))
@@ -306,6 +347,41 @@ setTimeout(() => {
       ok('点把手不误关', d3.classList.contains('open'), d3.className)
       fireDoc('pointerdown', mkNode('div'))
       ok('点面板外关闭抽屉', !d3.classList.contains('open'), d3.className)
+
+      // —— 出场动画：先播动画，放完再清空内容 ——
+      await openWith({})
+      const d4 = document.body.children.find((c) => /dshbl-drawer/.test(c.className))
+      const act = (name) => {
+        const n = (d4.querySelectorAll('[data-act]') || []).filter((x) => x['data-act'] === name)[0]
+        if (n && n.onclick) n.onclick()
+        return !!n
+      }
+      ok('展开态有内容', /dshbl-hd/.test(d4.innerHTML), 'len=' + (d4.innerHTML || '').length)
+      ok('找到关闭按钮', act('close'))
+      ok('关闭后 open 类已摘掉', !d4.classList.contains('open'), d4.className)
+      ok('出场期间内容还在（不是滑出空盒子）', /dshbl-hd/.test(d4.innerHTML),
+        'innerHTML 长度=' + (d4.innerHTML || '').length)
+      await new Promise((r) => setTimeout(r, 600))
+      ok('动画放完后内容被清空', !/dshbl-hd/.test(d4.innerHTML), '残留=' + (d4.innerHTML || '').slice(0, 40))
+
+      // 出场中途重新展开：应取消出场，不能被定时器清掉
+      await openWith({})
+      const d5 = document.body.children.find((c) => /dshbl-drawer/.test(c.className))
+      const act5 = (name) => {
+        const n = (d5.querySelectorAll('[data-act]') || []).filter((x) => x['data-act'] === name)[0]
+        if (n && n.onclick) n.onclick()
+      }
+      act5('close')
+      ok('再次进入出场态', !d5.classList.contains('open') && /dshbl-hd/.test(d5.innerHTML), d5.className)
+      // 把手的 click 是 addEventListener 挂的（bindDrag 里），桩子里点不到；
+      // 胶囊是 pill.onclick = toggle，走它来触发同一个 setOpen 路径
+      const p5 = document.body.children.find((c) => /dshbl-pill/.test(c.className))
+      ok('找到可触发的开关（胶囊 onclick）', !!(p5 && p5.onclick))
+      p5.onclick()
+      ok('出场中途重开：open 回来且有内容', d5.classList.contains('open') && /dshbl-hd/.test(d5.innerHTML),
+        'innerHTML=' + (d5.innerHTML || '').slice(0, 40))
+      await new Promise((r) => setTimeout(r, 600))
+      ok('重开后旧定时器不会清空内容', /dshbl-hd/.test(d5.innerHTML), '被误清空')
 
       console.log('\n' + pass + ' passed, ' + fail + ' failed')
       process.exit(fail ? 1 : 0)

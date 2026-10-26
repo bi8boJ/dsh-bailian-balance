@@ -48,13 +48,17 @@
     '.' + P + '-hsub{writing-mode:horizontal-tb;font-size:9px;color:var(--dim3);letter-spacing:.06em}',
     // —— 抽屉：实色底，无 backdrop-filter ——
     '.' + P + '-drawer{position:fixed;top:48px;bottom:12px;right:0;z-index:2147483001;overflow:auto;',
-    'padding:0 18px 24px;transform:translateX(103%);transition:transform .22s var(--ease);',
+    'padding:0 18px 24px;transform:translateX(103%);opacity:0;pointer-events:none;',
+    'transition:transform .3s var(--ease),opacity .24s ease;',
     'border:1px solid var(--line);border-right:none;border-radius:16px 0 0 16px;background:var(--base);color:var(--txt);',
     'font:12.5px/1.7 var(--sans);max-width:92vw;',
     'box-shadow:-24px 16px 60px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.04)}',
     '.' + P + '-drawer.left{left:0;right:auto;border-radius:0 16px 16px 0;border-right:1px solid var(--line);border-left:none;',
     'transform:translateX(-103%)}',
-    '.' + P + '-drawer.open{transform:none}',
+    '.' + P + '-drawer.open{transform:none;opacity:1;pointer-events:auto}',
+    // 内容比外壳晚一点点，形成错峰入场；关闭时随外壳一起淡出
+    '.' + P + '-body{transition:opacity .2s ease .06s,transform .28s var(--ease) .06s}',
+    '.' + P + '-drawer:not(.open) ' + '.' + P + '-body{opacity:0;transform:translateY(8px)}',
     '.' + P + '-hz{height:1px;margin:0 -18px 16px;background:linear-gradient(90deg,transparent,var(--acc-40) 25%,var(--acc-40) 75%,transparent)}',
     '.' + P + '-drawer::-webkit-scrollbar{width:10px}',
     '.' + P + '-drawer::-webkit-scrollbar-thumb{background:var(--line2);border-radius:8px;border:3px solid transparent;background-clip:padding-box}',
@@ -106,7 +110,14 @@
     '.' + P + '-pill b{font-weight:600;color:var(--acc);font-variant-numeric:tabular-nums}',
     '.' + P + '-panel{position:fixed;left:16px;bottom:56px;z-index:2147483001;width:640px;max-width:calc(100vw - 32px);',
     'max-height:min(78vh,760px);overflow:auto;border-radius:var(--r2);border:1px solid var(--line);background:var(--base);',
-    'color:var(--txt);font:12.5px/1.7 var(--sans);box-shadow:0 24px 60px rgba(0,0,0,.6);padding:16px 18px}',
+    'color:var(--txt);font:12.5px/1.7 var(--sans);box-shadow:0 24px 60px rgba(0,0,0,.6);padding:16px 18px;',
+    'animation:dshbl-panel-in .26s var(--ease) both}',
+    // 出场：JS 挂上 closing 类，动画放完再移除节点
+    // 注意名字要带 panel- 前缀：裸 dshbl-in 已被内容区换页动画占用（见上方 -body 规则），
+    // 同名会把它覆盖掉 —— 实测踩过。
+    '@keyframes dshbl-panel-in{from{opacity:0;transform:translateY(12px) scale(.985)}to{opacity:1;transform:none}}',
+    '@keyframes dshbl-panel-out{from{opacity:1;transform:none}to{opacity:0;transform:translateY(8px) scale(.99)}}',
+    '.' + P + '-panel.closing{animation:dshbl-panel-out .2s ease both;pointer-events:none}',
     // —— 内容原子 ——
     '.' + P + '-dot{width:6px;height:6px;border-radius:50%;background:var(--ok);flex:0 0 auto;display:inline-block;box-shadow:0 0 8px var(--ok)}',
     '.' + P + '-dot.warn{background:var(--warn);box-shadow:0 0 8px var(--warn)}',
@@ -174,7 +185,8 @@
     '.' + P + '-in{width:100%;box-sizing:border-box;padding:7px 10px;border-radius:8px;border:1px solid var(--line2);',
     'background:#06080C;color:var(--txt);font:12px var(--tech);transition:border-color var(--dur),box-shadow var(--dur)}',
     '.' + P + '-in:focus{outline:none;border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-12)}',
-    '@media (prefers-reduced-motion:reduce){.' + P + '-drawer,.' + P + '-bar i,.' + P + '-btn,.' + P + '-tab,.' + P + '-handle{transition:none}',
+    '@media (prefers-reduced-motion:reduce){.' + P + '-drawer,.' + P + '-bar i,.' + P + '-btn,.' + P + '-tab,.' + P + '-handle,.' + P + '-body{transition:none}',
+    '.' + P + '-panel,.' + P + '-panel.closing,.' + P + '-body{animation:none}',
     '.' + P + '-body{animation:none}}'
   ].join('\n')
 
@@ -368,11 +380,38 @@
     pull(false)
     timer = setInterval(function () { pull(true) }, 30000)
   }
-  function setOpen(v) {
-    open = !!v
-    try { localStorage.setItem(LS_OPEN, open ? '1' : '0') } catch (e) {}
+  // 出场动画：关闭时不能立刻清空内容，否则滑出去的是一只空盒子。
+  // closing 期间 render() 保留内容、只切状态类；定时器到点再真正清场。
+  var closing = false
+  var closeTimer = 0
+  var CLOSE_MS = 300 // 与 CSS 的 .3s/.26s 对齐，留一点余量
+
+  function clearNow() {
+    closing = false
+    clearTimeout(closeTimer)
     render()
-    if (open) pull(true)
+  }
+  function beginClose() {
+    if (!open && !closing) return
+    open = false
+    closing = true
+    try { localStorage.setItem(LS_OPEN, '0') } catch (e) {}
+    clearTimeout(closeTimer)
+    closeTimer = setTimeout(clearNow, CLOSE_MS + 60)
+    render()
+  }
+  function setOpen(v) {
+    if (v) {
+      // 出场中途重新展开：取消清场，别让旧定时器把刚打开的面板清空
+      closing = false
+      clearTimeout(closeTimer)
+      open = true
+      try { localStorage.setItem(LS_OPEN, '1') } catch (e) {}
+      render()
+      pull(true)
+      return
+    }
+    beginClose()
   }
   function toggle() { setOpen(!open) }
   // 把手既要能点（展开）又要能拖（改上下位置）：位移超 4px 才算拖动，并吞掉随之而来的 click。
@@ -549,6 +588,24 @@
           + '<div><b>' + esc(x.title) + '</b><span>' + esc(x.body) + '</span></div></div>'
       }).join('') + '</div>'
   }
+  // 模型来源清单：让使用者看得见"哪些是自动认出来的、单价从哪来"
+  function monitorList(mo) {
+    if (!mo || !(mo.models || []).length) return ''
+    var h = '<div class="' + P + '-g5 ' + P + '-grid">'
+      + '<b>模型</b><b class="' + P + '-num">输入</b><b class="' + P + '-num">输出</b>'
+      + '<b class="' + P + '-num">缓存读</b><b>来源</b><div class="' + P + '-rule"></div>'
+    mo.models.forEach(function (m) {
+      var p = (mo.prices || {})[m] || {}
+      var src = mo.source && mo.source[m] === 'manual' ? '手填' : (mo.autoDetect ? '自动' : '手填')
+      h += '<span style="overflow-wrap:anywhere">' + esc(m) + '</span>'
+        + '<span class="' + P + '-num">' + (p.input == null ? '—' : p.input) + '</span>'
+        + '<span class="' + P + '-num">' + (p.output == null ? '—' : p.output) + '</span>'
+        + '<span class="' + P + '-num">' + (p.cache == null ? '—' : p.cache) + '</span>'
+        + '<span class="' + (src === '自动' ? P + '-ok' : P + '-muted') + '">' + src + '</span>'
+    })
+    return h + '</div>'
+  }
+
   function tabs() {
     var items = [['live', '实时用量'], ['free', '免费额度'], ['tpm', '限流配额'], ['bss', '账户余额'], ['cfg', '设置']]
     return '<div class="' + P + '-tabs">' + items.map(function (x) {
@@ -564,6 +621,16 @@
       + row('今日折算', t.money ? t.money + '（按你在「设置」里填的单价）' : '<span class="' + P + '-muted">未配置单价，仅报 token</span>')
       + row('上一轮', lt.tokens ? kfmt(lt.input + lt.cache + lt.output) + ' tok · ' + esc(lt.model || '') + ' · ' + esc((lt.at || '').slice(11, 19)) : '—')
       + '</div>'
+    var mo = s.monitor || {}
+    var ml = mo.models || []
+    if (ml.length) {
+      var nMan = 0, nAuto = 0
+      ml.forEach(function (m) { if ((mo.source || {})[m] === 'manual') nMan++; else nAuto++ })
+      h += '<div class="' + P + '-note">监控 ' + ml.length + ' 个模型（'
+        + (mo.autoDetect ? '自动识别 ' + nAuto + ' · 手填 ' + nMan : '手填 ' + nMan + ' · 自动识别已关闭') + '）'
+        + (mo.catalog && mo.catalog.ok ? '，官方单价目录 ' + (mo.catalog.count || 0) + ' 条' : '')
+        + '</div>'
+    }
     if (models.length) {
       // 用表格而不是 kv 行：kv 的第二列塞不下「in/cache/out」三段，右对齐后会折成两行很难看
       h += '<div class="' + P + '-sec">今日按模型拆分</div><div class="' + P + '-grid ' + P + '-g5">'
@@ -645,6 +712,7 @@
       + '</div>'
     if (b.coupons && b.coupons.length) {
       h += '<div class="' + P + '-sec">代金券 / 学生券（QueryCashCoupons，' + b.coupons.length + ' 张）</div>'
+      if (b.hiddenNote) h += '<div class="' + P + '-note">' + esc(b.hiddenNote) + '</div>'
       b.coupons.forEach(function (c) {
         var bal = Number(c.balance), nom = Number(c.nominal)
         var pct = isFinite(bal) && isFinite(nom) && nom > 0 ? Math.max(0, Math.min(100, Math.round(bal / nom * 1000) / 10)) : null
@@ -661,7 +729,8 @@
           + (c.scope ? '<br>适用范围：' + esc(c.scope) : '') + '</div></div>'
       })
     } else {
-      h += '<div class="' + P + '-muted" style="margin:10px 0">没有可用代金券。</div>'
+      h += '<div class="' + P + '-muted" style="margin:10px 0">'
+        + (b.hiddenVouchers ? '没有可用代金券（满减券已按设置隐藏）。' : '没有可用代金券。') + '</div>'
     }
     h += '<div class="' + P + '-note ok">字段已按真账号实测报文校准（2026-10-20）：余额取 <code class="' + P + '-code">AvailableAmount / AvailableCashAmount</code>，券列表取 <code class="' + P + '-code">Data.CashCoupon[]</code>。</div>'
     return h
@@ -697,7 +766,12 @@
       + '</div><div class="' + P + '-muted" style="margin-top:5px">选一个颜色即刻生效；太暗或太亮会自动调到可读范围。'
       + '刷新页面即生效，不用重启。</div>'
     return show + acc
-      + '<div class="' + P + '-sec">监控的模型（逗号分隔 · 请改成你账号里实际在用的模型名）</div>'
+      + '<div class="' + P + '-sec">监控的模型与单价</div>'
+      + '<label style="display:inline-block;margin:2px 0 6px"><input type="checkbox" id="' + P + '-auto" '
+      + (c.autoDetect === false ? '' : 'checked') + '> 自动识别（读你 DSH 里配置的模型、历史用过的模型，以及阿里云官方单价目录）</label>'
+      + '<div class="' + P + '-note" style="margin-bottom:8px">关掉后只认下面手填的内容。手填过的模型与单价<b>永远优先</b>于自动识别。</div>'
+      + monitorList((state || {}).monitor)
+      + '<div class="' + P + '-sec" style="margin-top:12px">手填补充 / 覆盖的模型（逗号分隔，可留空）</div>'
       + '<input class="' + P + '-in" id="' + P + '-models" value="' + esc((c.models || []).join(', ')) + '">'
       + '<div class="' + P + '-sec" style="margin-top:12px">百炼 API Key 的凭据名（留空 = 自动发现）</div>'
       + '<input class="' + P + '-in" id="' + P + '-keyref" placeholder="留空即可；自动发现失败时手填，如 ALIYUN_DASHSCOPE_API_KEY" value="'
@@ -708,6 +782,8 @@
       + '<div style="display:flex;gap:8px"><input class="' + P + '-in" id="' + P + '-akid" placeholder="AccessKeyId">'
       + '<input class="' + P + '-in" id="' + P + '-aksec" type="password" placeholder="AccessKeySecret"></div>'
       + '<label style="display:inline-block;margin-top:8px"><input type="checkbox" id="' + P + '-bsson" ' + (c.bss && c.bss.enabled ? 'checked' : '') + '> 启用账户余额取数</label>'
+      + '<label style="display:inline-block;margin-top:8px"><input type="checkbox" id="' + P + '-bssvh" '
+      + (c.bss && c.bss.hideVouchers === false ? '' : 'checked') + '> 只显示代金券（隐藏满减券）</label>'
       + '<div style="margin-top:12px"><span class="' + P + '-btn pri" data-act="save">保存设置</span> '
       + '<span class="' + P + '-btn" data-act="recheck">重新取数</span></div>'
       + '<div class="' + P + '-muted" style="margin-top:8px">配置文件 <code class="' + P + '-code">~/.dsh/bailian-balance/config.json</code>；AK/SK 写进 DSH 凭据库的 '
@@ -755,11 +831,19 @@
     if (sidebar) renderHandle(); else renderPill()
     if (!open) {
       drawer.classList.remove('open')
+      if (closing) {
+        // 动画还在放：内容留着，只给面板挂出场类
+        var pn = document.getElementById(P + '-panel')
+        if (pn) pn.classList.add('closing')
+        return
+      }
       drawer.innerHTML = ''
       var old = document.getElementById(P + '-panel')
       if (old) old.remove()
       return
     }
+    var pnOpen = document.getElementById(P + '-panel')
+    if (pnOpen) pnOpen.classList.remove('closing')
     if (sidebar) {
       // 轮询每 30 秒会重写内容区；若用户正在「设置」里打字，重写会清空输入，这一轮跳过渲染
       var ae = document.activeElement
@@ -818,7 +902,11 @@
       var patch = {
         models: models.length ? models : DEFAULTS_MODELS, prices: prices,
         apiKeyRef: ((document.getElementById(P + '-keyref') || {}).value || '').trim() || 'auto',
-        bss: { enabled: !!document.getElementById(P + '-bsson').checked },
+        autoDetect: !!(document.getElementById(P + '-auto') || {}).checked,
+        bss: {
+          enabled: !!document.getElementById(P + '-bsson').checked,
+          hideVouchers: !!(document.getElementById(P + '-bssvh') || {}).checked,
+        },
         widget: Object.assign({}, ((state && state.config) || {}).widget || {}, {
           mode: (document.getElementById(P + '-mode') || {}).value || 'sidebar',
           edge: (document.getElementById(P + '-edge') || {}).value || 'right',
