@@ -10,6 +10,7 @@ import { pathToFileURL, fileURLToPath } from 'url'
 // 注意：必须用 fileURLToPath。`new URL(...).pathname.replace(/^\//,'')` 是 Windows-only
 // 写法，Linux 下会拼成相对路径直接 ERR_MODULE_NOT_FOUND（评审实测：CI 的 ubuntu job 首推即红）
 const SRC = fileURLToPath(new URL('../lib/index.js', import.meta.url))
+let NS = null
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'bl-console-'))
 const DSH = path.join(TMP, 'dsh')
 const BLDIR = path.join(TMP, 'bailian')
@@ -112,7 +113,9 @@ async function boot(n) {
   const store = {}
   const { ctx, routes } = mkCtx(store)
   const root = { effect() {}, on: () => () => {}, inject: (_d, cb) => cb(ctx) }
-  const mod = (await import(pathToFileURL(SRC).href + '?v=' + n)).default
+  const nsMod = await import(pathToFileURL(SRC).href + '?v=' + n)
+  NS = nsMod
+  const mod = nsMod.default
   mod.apply(root)
   // apply() 里注册路由要等一个异步阶段，同帧取会拿到空 Map
   await new Promise((r) => setTimeout(r, 60))
@@ -346,6 +349,38 @@ async function post(routes, p, obj) {
     JSON.stringify(mo.source))
   ok('目录拉取有状态可展示', mo.catalog && mo.catalog.ok === true && mo.catalog.count >= 3,
     JSON.stringify(mo.catalog))
+  // —— 回归：目录缓存必须真的落到磁盘 ——
+  // 2026-10-29 的 bug：catalogFile() 里写成 path.join(DIR, …)，DIR 未定义 → 抛
+  // ReferenceError 被两处 try/catch 静默吞掉 → 缓存永远读不到也写不出。
+  // 后果不是「单价空」（价格仍能走网络拿到），而是缓存从「24 小时一次」退化成
+  // 「每个刷新周期都重新拉一遍目录」。所以这里断言的是"文件存在"这个可观测事实。
+  // DATA_DIR 是模块加载时按当时 DSH_HOME 定下的常量，而本测试逐个 block 改
+  // DSH_HOME 做隔离——所以路径基准必须取插件自己认为的那份，不能用环境变量重算。
+  // 静态防呆：lib/index.js 里 path.join(<大写标识符>, …) 的标识符必须真的声明过。
+  // 这条能抓住「DIR / DATA_DIR」这类拼错，而 node --check 与运行时 catch 都抓不到。
+  const libSrc = fs.readFileSync(SRC, 'utf8')
+  const declared = new Set((libSrc.match(/^(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/gm) || [])
+    .map((l) => l.replace(/^(?:const|let|var|function|class)\s+/, '')))
+  for (const m of libSrc.matchAll(/\b(?:import|export)\s+\{([^}]*)\}/g)) {
+    for (const part of m[1].split(',')) {
+      const n = part.trim().split(/\s+as\s+/).pop()
+      if (n) declared.add(n.trim())
+    }
+  }
+  const usedCaps = [...new Set([...libSrc.matchAll(/path\.join\(([A-Z][A-Z0-9_]*)\s*,/g)].map((m) => m[1]))]
+  const undeclared = usedCaps.filter((n) => !declared.has(n))
+  ok('path.join 里的大写常量都已声明（防 DIR 这类拼错）', undeclared.length === 0,
+    '未声明: ' + JSON.stringify(undeclared) + ' | 用到的: ' + JSON.stringify(usedCaps))
+  const cachePath = NS.__test.catalogFile()
+  ok('目录缓存文件写到了 DATA_DIR 下', fs.existsSync(cachePath), cachePath)
+  ok('缓存路径落在 bailian-balance 目录内',
+    path.basename(path.dirname(cachePath)) === 'bailian-balance', cachePath)
+  let cacheJson = null
+  try { cacheJson = JSON.parse(fs.readFileSync(cachePath, 'utf8')) } catch (e) { /* 下面断言失败信息更清楚 */ }
+  ok('缓存内容含时间戳与单价表',
+    !!cacheJson && Number(cacheJson.at) > 0 && cacheJson.prices && Number((cacheJson.prices['qwen3.8-max'] || {}).input) === 12,
+    JSON.stringify(cacheJson && Object.keys(cacheJson)))
+
   process.env.DSH_PROFILE_DIR = sd
   process.env.DSH_HOME = sh
 }

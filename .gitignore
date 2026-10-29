@@ -3,3 +3,8 @@ test/sandbox-home
 *.log
 .DS_Store
 docs/img/*.html
+
+# 内部工作文档（含本机绝对路径与过程性判断），不纳入版本控制
+.superpowers/
+docs/superpowers/
+docs/design-*.md

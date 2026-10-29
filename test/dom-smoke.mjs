@@ -157,6 +157,21 @@ setTimeout(() => {
     ok('关闭按钮不在左侧动作组里', !/data-act="close"/.test(actsBlock), actsBlock.slice(0, 60))
     ok('关闭按钮在头部内', /dshbl-hd[\s\S]{0,900}data-act="close"/.test(drawer.innerHTML))
     // —— 用户反馈：菜单要有进场与出场动画 ——
+    // —— 适配原版：令牌必须引用 DSH 的 alias 层，而不是自写一套死颜色 ——
+    const cssTok = (document.head.children.find((c) => c.tagName === 'STYLE') || {}).textContent || ''
+    ok('底色引用 --dsw-alias-bg-base', /--base:var\(--dsw-alias-bg-base,/.test(cssTok))
+    ok('层级引用 --dsw-alias-bg-layer-1/2/3',
+      /--surf:var\(--dsw-alias-bg-layer-1,/.test(cssTok) && /--raise:var\(--dsw-alias-bg-layer-2,/.test(cssTok) &&
+      /--raise2:var\(--dsw-alias-bg-layer-3,/.test(cssTok))
+    ok('文字三级引用 --dsw-alias-label-*',
+      /--txt:var\(--dsw-alias-label-primary,/.test(cssTok) && /--dim:var\(--dsw-alias-label-tertiary,/.test(cssTok))
+    ok('状态色引用 --dsw-alias-state-*',
+      /--ok:var\(--dsw-alias-state-success-primary,/.test(cssTok) && /--bad:var\(--dsw-alias-state-error-primary,/.test(cssTok))
+    ok('字体引用 --dsw-font-family', /--sans:var\(--dsw-font-family,/.test(cssTok))
+    ok('圆角引用 --dsw-radius-*', /--r:var\(--dsw-radius-md,/.test(cssTok) && /--r2:var\(--dsw-radius-lg,/.test(cssTok))
+    ok('每个 token 都带兜底值（宿主没定义也不能崩）',
+      !/var\(--dsw-[a-z0-9-]+\)/.test(cssTok), '存在无兜底的 var(--dsw-*)')
+    ok('没有再硬编码 Endfield 字体', !/Endfield/.test(src))
     ok('抽屉关闭态不可命中指针（避免出场期间吞点击）',
       /-drawer\{[^}]*pointer-events:none/.test(src) && /-drawer\.open\{[^}]*pointer-events:auto/.test(src))
     ok('抽屉带透明度过渡（不只是位移）', /-drawer\{[^}]*opacity:0[^}]*transition:[^}]*opacity/.test(src))
@@ -192,13 +207,19 @@ setTimeout(() => {
     // 否则这条回归就悄悄失效了（顺序仍是摘要在标签条之前）。
     ok('摘要排在标签条之前', dh.indexOf('今日') < dh.indexOf('实时用量'))
     ok('小节标题不再拖长横线', !src.includes('-sec:after'))
-    ok('余额数字用强调色', /-sumrow b\.acc|class="acc"/.test(dh) || src.includes('-sum b.acc'))
+    // 版式变成「一行三栏」后，强调色的挂点从 -sumrow b.acc 变成 -v.acc
+    ok('余额数字用强调色', /-v acc/.test(dh) && src.indexOf('-v.acc{color:var(--acc)}') > 0)
+    ok('摘要是一行三栏（不是三行堆叠）', (dh.match(/-cell"/g) || []).length === 3,
+      String((dh.match(/-cell"/g) || []).length))
+    // 这里 seen 还没初始化（TDZ），默认 Tab 就是 live，直接用 dh
+    ok('主 Tab 有四个指标块', (dh.match(/-met"/g) || []).length === 4,
+      String((dh.match(/-met"/g) || []).length))
     ok('抽屉有标题与标签栏', /额度与用量/.test(drawer.innerHTML) && /data-tab/.test(drawer.innerHTML))
     const tabs = drawer.querySelectorAll('[data-tab]')
     ok('五个标签页都在', ['live', 'free', 'tpm', 'bss', 'cfg'].every((t) => tabs.some((n) => n['data-tab'] === t)), tabs.length + ' 个')
     const seen = {}
     // 代码里是 `n.onclick = fn`，所以触发要点 onclick 属性（不是 addEventListener）
-    for (const [want, kw] of [['free', 'qwen3.8-max'], ['tpm', '12.35 万'], ['bss', '示例代金券'], ['cfg', '显示方式'], ['live', '今日 token 合计']]) {
+    for (const [want, kw] of [['free', 'qwen3.8-max'], ['tpm', '12.35 万'], ['bss', '示例代金券'], ['cfg', '显示方式'], ['live', '本机 DSH 会话实测']]) {
       drawer.innerHTML = ''
       const node = tabs.filter((n) => n['data-tab'] === want)[0]
       if (node && node.onclick) node.onclick()
@@ -213,16 +234,17 @@ setTimeout(() => {
     ok('设置页含模式/停靠边/宽度控件', /dshbl-mode/.test(seen.cfg) && /dshbl-edge/.test(seen.cfg) && /dshbl-width/.test(seen.cfg))
 
     // —— Task 3：强调色预设与原生调色板 ——
-    ok('设置页有 4 个预设色块', (seen.cfg.match(/data-acc=/g) || []).length === 4,
+    ok('设置页有 5 个预设色块（含原版蓝）', (seen.cfg.match(/data-acc=/g) || []).length === 5,
       '找到 ' + (seen.cfg.match(/data-acc=/g) || []).length + ' 个')
     ok('设置页有原生调色板', /type="color"/.test(seen.cfg) && /id="dshbl-acc"/.test(seen.cfg))
     drawer.innerHTML = ''
     tabs.filter((n) => n['data-tab'] === 'cfg')[0].onclick()
     const sw = drawer.querySelectorAll('[data-acc]')
-    ok('预设节点可点击', sw.length === 4, String(sw.length))
+    ok('预设节点可点击', sw.length === 5, String(sw.length))
+    ok('第一个预设是原版品牌蓝', /data-acc="#5686FE"/i.test(seen.cfg), seen.cfg.slice(0, 40))
     const styleEl0 = document.head.children.find((c) => c.tagName === 'STYLE')
     if (sw[1] && sw[1].onclick) sw[1].onclick()
-    ok('点预设立刻换色', /--acc:#2fd4c4/i.test(styleEl0.textContent),
+    ok('点预设立刻换色（索引1=天蓝）', /--acc:#4fa8ff/i.test(styleEl0.textContent),
       (/--acc:[^;]*/i.exec(styleEl0.textContent) || ['(无)'])[0])
     const save = drawer.querySelectorAll('[data-act]').filter((n) => n['data-act'] === 'save')[0]
     // 顺手把 firstRun 也设成 wizard：同一次 save 就能同时证明 accent 与 firstRun 都写回配置
@@ -231,7 +253,7 @@ setTimeout(() => {
     if (save && save.onclick) save.onclick()
     setTimeout(() => {
       const last = posted[posted.length - 1] || {}
-      ok('保存把 accent 写进配置', last.widget && String(last.widget.accent).toLowerCase() === '#2fd4c4',
+      ok('保存把 accent 写进配置', last.widget && String(last.widget.accent).toLowerCase() === '#4fa8ff',
         JSON.stringify(last.widget || {}))
       ok('保存把 firstRun 写进配置', last.widget && last.widget.firstRun === 'wizard',
         JSON.stringify(last.widget || {}))
@@ -268,7 +290,7 @@ setTimeout(() => {
       const accOf = (t) => { const m = /--acc:(#[0-9a-f]{6})/i.exec(t); return m ? m[1].toLowerCase() : '' }
 
       const t0 = await accentText(null)
-      ok('默认强调色是天蓝', accOf(t0) === '#4fa8ff', 'acc=' + accOf(t0))
+      ok('默认强调色是原版 DSH 蓝', accOf(t0) === '#5686fe', 'acc=' + accOf(t0))
       const t1 = await accentText('#0a0a0a')
       ok('近黑自选色被提亮', accOf(t1) !== '#0a0a0a' && accOf(t1).length === 7, 'acc=' + accOf(t1))
       const t2 = await accentText('#ffffff')
